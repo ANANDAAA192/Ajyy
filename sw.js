@@ -1,30 +1,46 @@
 const CACHE_NAME = 'blog-cache-v1';
 const CACHE_DURATION = 30 * 24 * 60 * 60 * 1000; // 30 days in ms
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', event => {
   self.skipWaiting();
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('activate', event => {
+  clients.claim();
+});
+
+self.addEventListener('fetch', event => {
   event.respondWith(
-    caches.open(CACHE_NAME).then(async (cache) => {
-      const cached = await cache.match(event.request);
+    caches.open(CACHE_NAME).then(async cache => {
+      const cachedResponse = await cache.match(event.request);
       const now = Date.now();
 
-      if (cached) {
-        const date = new Date(cached.headers.get('date') || Date.now());
-        if ((now - date.getTime()) < CACHE_DURATION) {
-          return cached;
-        } else {
-          cache.delete(event.request);
+      // Try to reuse if it's not expired
+      if (cachedResponse) {
+        const storedTime = await cache.match(event.request.url + '-timestamp');
+        if (storedTime) {
+          const text = await storedTime.text();
+          const saved = parseInt(text);
+          if ((now - saved) < CACHE_DURATION) {
+            return cachedResponse;
+          } else {
+            // expired, try to update
+            cache.delete(event.request);
+            cache.delete(event.request.url + '-timestamp');
+          }
         }
       }
 
-      return fetch(event.request).then((response) => {
-        const responseClone = response.clone();
-        cache.put(event.request, responseClone);
+      // Try to fetch fresh and cache it
+      return fetch(event.request).then(async response => {
+        if (response.ok && (event.request.method === 'GET')) {
+          cache.put(event.request, response.clone());
+          cache.put(event.request.url + '-timestamp', new Response(now.toString()));
+        }
         return response;
-      }).catch(() => cached || Response.error());
+      }).catch(() => {
+        return cachedResponse || Response.error();
+      });
     })
   );
 });
